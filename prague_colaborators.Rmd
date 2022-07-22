@@ -1,0 +1,216 @@
+---
+title: "prague_colaborators"
+author: "RRPS"
+date: '2022-07-14'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+knitr::opts_chunk$set(
+	fig.height = 5,
+	fig.width = 8,
+	dpi = 180,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	echo = TRUE
+)
+```
+
+```{r CLEAR EVERYTHING, eval=FALSE, include=FALSE}
+# unload all non-base packages
+lapply(names(sessionInfo()$otherPkgs), function(pkgs)
+  detach(
+    paste0('package:', pkgs),
+    character.only = T,
+    unload = T,
+    force = T
+))
+
+rm(list=ls())
+```
+
+Need to start a new session to run this script due to gstat conflicts with other packages
+
+```{r load libraries, message=FALSE, warning=FALSE, include=FALSE}
+# load the packages
+# main packs to start with
+pcks <- c( "tidyverse", "janitor")
+# require("tidyverse")
+
+if(sum(as.numeric(!pcks %in% installed.packages())) != 0){
+  installation <- pcks[!pcks %in% installed.packages()]
+  for(i in 1:length(installation)) {
+    install.packages(installation, dependencies = T)
+    break()}
+  suppressPackageStartupMessages(
+  sapply(pcks,require,character.only = T)
+) 
+} else {
+  suppressPackageStartupMessages(
+  sapply(pcks,require,character.only = T)
+) 
+}
+
+rm(pcks)
+```
+
+# setting working directories
+```{r directories}
+# get working directory and paste directory to save outputs
+# in the Knit dropdown menu, select Knit directory, then Current Working Directory.
+setwd('C:/Users/rrocha/Documents/R/microbiome_br/')
+work_dir <- getwd()
+folder_path <- paste0(work_dir, "/outputs")
+data.dir <- paste0(work_dir, "/data/prague")
+setwd(data.dir)
+
+# # set colors
+# color_distance <- c("D0" = "deepskyblue2", 'D1' = 'brown1',  "D2" = "forestgreen", "D3" = "#440154FF", "D4" = "burlywood")
+# # color_distance1 <- c('D1' = 'brown1',  "D2" = "forestgreen", "D3" = "#440154FF", "D4" = "burlywood")
+# color_depth <- c('DP1'="darkorange",'DP2'="purple", "DP3" = "cyan4")
+# color_sites <- c(lease_1 = "#56B4E9", lease_2 ="#E69F00"  , Control =  "#009E73", other_leases = "#D1BCA8")
+
+# check the working directory
+paste("Working in directory:", getwd())
+```
+
+# data
+
+if the status in "Complete Genome" < 8: get the biggest Status. if > 8: make 3 column with Q1, median, and Q3 and count the genomes.
+If there isn´t Complete Genome > Scaffold > Contig > Chromosome 
+
+```{r get the data}
+# eukaryotic table
+euk <- read_delim('eukaryotes.txt')
+euk.clean <- euk %>% 
+  mutate(`#Organism/Name` = str_replace_all(`#Organism/Name`, "\\[|\\]","")) %>% 
+  mutate(Organism = `#Organism/Name`, .after = `#Organism/Name`) %>%
+  janitor::clean_names(.)
+
+# take a look in the data
+euk.clean %>% filter(if_any(everything(), ~str_detect(., "Candida albicans"))) %>% pull(status, organism)
+
+# prokaryotic table
+prok <- read_delim('prokaryotes.txt')
+prok.clean <- prok %>% 
+  mutate(`#Organism/Name` = str_replace_all(`#Organism/Name`, "\\[|\\]","")) %>% 
+  mutate(Organism = `#Organism/Name`, .after = `#Organism/Name`) %>%
+  janitor::clean_names(.)
+
+#prok %>% slice(102225)
+
+# lets take a look in the databases
+prok.clean %>% filter(if_any(everything(), ~str_detect(., "Koribacter versatilis Ellin345"))) %>% 
+  filter(if_any(Status, ~str_detect(., "Complete")))
+prok %>% filter(if_any(everything(), ~str_detect(., "Candidatus")))
+
+# table final
+final.table <- read_delim('MG_FEDERICA_TABLE_FINAL.tab')
+
+# it removes any instance of '[' or ']'
+table.clean <- final.table %>% 
+  mutate(BEST_TAX = str_replace_all(BEST_TAX, "\\[|\\]","")) %>% 
+  rename('number_organism_name' = 'BEST_TAX') %>%
+  mutate(organism = number_organism_name, .after = number_organism_name) %>%
+  clean_names()
+
+table.clean %>% select(number_organism_name) %>% filter(if_any(everything(), ~str_detect(., "Candidatus")))
+
+# get the taxonomies
+taxonomies <- table.clean %>% filter(number_organism_name != "-") %>% pull(number_organism_name) %>% as.factor() %>% levels()
+
+rm(euk,prok)
+
+```
+
+Extract the information based on the texonomies
+For prokaryotes 
+```{r}
+# filter prok table
+prok.info <- prok.clean %>% 
+              select(number_organism_name, organism, size_mb, gc_percent, status) %>% 
+              mutate(gc_percent = as.numeric(gc_percent))
+best_tax_prok <- taxonomies %>% map_df(., ~prok.info  %>% 
+                                               filter(str_detect(organism, .x)) %>% 
+                                               mutate(taxonomy = .x)
+                                       )
+```
+
+For eukaryotes
+```{r}
+# filter euk table
+euk.info <- euk.clean %>% 
+              select(number_organism_name, organism, size_mb, gc_percent, status) %>% 
+              mutate(gc_percent = as.numeric(gc_percent))
+best_tax_euk <- taxonomies %>% map_df(., ~euk.info  %>% 
+                                              filter(str_detect(organism, .x)) %>% 
+                                              mutate(taxonomy = .x)
+                                      )
+
+# all.info <- euk.info %>% bind_rows(prok.info)
+```
+
+Split the datasets based on status
+For prokayotes
+
+```{r}
+table_summ_prok <- best_tax_prok %>% 
+ select(taxonomy, status, size_mb, gc_percent) %>%
+  group_by(taxonomy, status) %>% 
+  skimr::skim(size_mb, gc_percent) %>%
+  left_join(best_tax_prok %>% 
+              group_by(taxonomy, status) %>% 
+              summarise(n_size_mb = n_distinct(size_mb),
+                        n_gc_percent = n_distinct(gc_percent))
+            )
+
+table_summ_prok %>% distinct(skim_variable)
+```
+
+```{r}
+# status
+# best_tax_prok %>% distinct(status)
+# best_tax_prok_complete_genome <- best_tax_prok %>% filter(status == 'Complete Genome')
+# best_tax_prok_scaffold <- best_tax_prok %>% filter(status == 'Scaffold')
+# best_tax_prok_contig <- best_tax_prok %>% filter(status == 'Contig')
+# best_tax_prok_chromosome <- best_tax_prok %>% filter(status == 'Chromosome') 
+                                  
+# best_tax_prok %>% summarise(mean_size_mb = mean(size_mb), 
+                    #           max_size_mb = max(size_mb), 
+                    #           min_size_mb = min(size_mb), 
+                    #           n_size_mb = n_distinct(size_mb)
+                    #           ) %>%
+  # filter(n_size_mb >= 3)
+```
+
+For eukayotes
+```{r}
+# status
+best_tax_euk %>% distinct(status)
+table_summ_euk <- best_tax_euk %>% 
+ select(taxonomy, status, size_mb, gc_percent) %>%
+  group_by(taxonomy, status) %>% 
+  skimr::skim(size_mb, gc_percent) %>%
+  left_join(best_tax_euk %>% 
+              group_by(taxonomy, status) %>% 
+              summarise(n_size_mb = n_distinct(size_mb),
+                        n_gc_percent = n_distinct(gc_percent))
+            )
+
+# table_summ_euk %>% distinct(skim_variable)
+# 
+# best_tax_euk %>% filter(taxonomy == "Alternaria alternata" & status == "Contig") %>%
+#   group_by(taxonomy, status) %>%
+#    summarise(n_size_mb = n_distinct(size_mb),
+#                         n_gc_percent = n_distinct(gc_percent)) 
+
+best_tax_euk %>% 
+              group_by(taxonomy, status) %>% 
+              summarise(n_size_mb = n_distinct(size_mb),
+                        n_gc_percent = n_distinct(gc_percent)) %>%
+              filter(n_size_mb >= 3) 
+
+```
