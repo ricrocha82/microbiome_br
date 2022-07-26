@@ -65,6 +65,8 @@ setwd('C:/Users/rrocha/Documents/R/microbiome_br/')
 work_dir <- getwd()
 folder_path <- paste0(work_dir, "/outputs")
 data.dir <- paste0(work_dir, "/data/prague")
+dir.create("data")
+dir.create(data.dir)
 setwd(data.dir)
 
 # # set colors
@@ -104,7 +106,8 @@ prok.clean <- prok %>%
 
 # lets take a look in the databases
 prok.clean %>% filter(if_any(everything(), ~str_detect(., "Koribacter versatilis Ellin345"))) %>% 
-  filter(if_any(Status, ~str_detect(., "Complete")))
+  filter(if_any(status, ~str_detect(., "Complete")))
+
 prok %>% filter(if_any(everything(), ~str_detect(., "Candidatus")))
 
 # table final
@@ -137,7 +140,21 @@ best_tax_prok <- taxonomies %>% map_df(., ~prok.info  %>%
                                                filter(str_detect(organism, .x)) %>% 
                                                mutate(taxonomy = .x)
                                        )
+# Store hits found
+
+write.table(x = best_tax_prok, file = "federica_found_taxonomy_prok.txt", quote = F, sep = "\t", row.names = F)
+
+## read hits found. Avoid running all steps again.
+# best_tax_prok <- read_delim(file = "federica_found_taxonomy_prok.txt")
+
+# Checking for differences between organism name and Taxonomy from FEDERICA's table
+options(pillar.print_max = 10, pillar.print_min = 10, pillar.width = 35)
+
+which(best_tax_prok$number_organism_name != best_tax_prok$taxonomy)
+best_tax_prok[which(best_tax_prok$number_organism_name != best_tax_prok$taxonomy), c(1,6)]
+
 ```
+
 
 For eukaryotes
 ```{r}
@@ -145,10 +162,18 @@ For eukaryotes
 euk.info <- euk.clean %>% 
               select(number_organism_name, organism, size_mb, gc_percent, status) %>% 
               mutate(gc_percent = as.numeric(gc_percent))
+# Indentify taxa without GC content info (353 found)
+euk.info[which(is.na(euk.info$gc_percent)),]
+
 best_tax_euk <- taxonomies %>% map_df(., ~euk.info  %>% 
                                               filter(str_detect(organism, .x)) %>% 
                                               mutate(taxonomy = .x)
                                       )
+# Store euk hits found
+write.table(x = best_tax_euk, file = "federica_found_taxonomy_euk.txt", quote = F, sep = "\t", row.names = F)
+
+## Read hits found. Avoid running all steps again.
+best_tax_euk <- read_delim(file = "federica_found_taxonomy_euk.txt")
 
 # all.info <- euk.info %>% bind_rows(prok.info)
 ```
@@ -172,18 +197,93 @@ table_summ_prok %>% distinct(skim_variable)
 
 ```{r}
 # status
-# best_tax_prok %>% distinct(status)
+best_tax_prok %>% distinct(status)
 # best_tax_prok_complete_genome <- best_tax_prok %>% filter(status == 'Complete Genome')
 # best_tax_prok_scaffold <- best_tax_prok %>% filter(status == 'Scaffold')
 # best_tax_prok_contig <- best_tax_prok %>% filter(status == 'Contig')
-# best_tax_prok_chromosome <- best_tax_prok %>% filter(status == 'Chromosome') 
-                                  
-# best_tax_prok %>% summarise(mean_size_mb = mean(size_mb), 
-                    #           max_size_mb = max(size_mb), 
-                    #           min_size_mb = min(size_mb), 
+# best_tax_prok_chromosome <- best_tax_prok %>% filter(status == 'Chromosome')
+
+# best_tax_prok %>% summarise(mean_size_mb = mean(size_mb),
+                    #           max_size_mb = max(size_mb),
+                    #           min_size_mb = min(size_mb),
                     #           n_size_mb = n_distinct(size_mb)
                     #           ) %>%
   # filter(n_size_mb >= 3)
+```
+
+```{r}
+# Create function to gather statistics about the genomic information, using the highest level of assembly and the longer assembly
+
+number_of_entries <- best_tax_prok %>% count(taxonomy)
+
+# See the taxa with the most entries
+
+number_of_entries[order(number_of_entries$n,decreasing = T),]
+
+## Tests
+# taxa = "Xanthomonas campestris pv. campestris" # 80
+# taxa = "Cronobacter turicensis" # 16
+# taxa = "Acetobacter pasteurianus IFO 3283-32" # 1
+# taxa = "Acetobacter pasteurianus IFO 3283-01" # 2
+# 
+# match("Acetobacter pasteurianus IFO 3283-32", number_of_entries$taxonomy)
+# number_of_entries[match(taxa, number_of_entries$taxonomy), "n"]
+# test_entries <- number_of_entries[match(taxa, number_of_entries$taxonomy), "n"]
+
+## The function
+genomic_traits <- function(taxa){
+  
+  Assembly_level <- c("Complete Genome","Chromosome","Scaffold","Contig")
+  
+  number_of_entries_in_genomic_db <- number_of_entries[match(taxa, number_of_entries$taxonomy),"n"]
+   
+  size_gc_status <-
+    best_tax_prok[which(!is.na(match(best_tax_prok$taxonomy,taxa))),c("size_mb","gc_percent","status")] %>%
+    mutate(number_of_entries_in_NCBI = as.numeric(number_of_entries_in_genomic_db))
+  
+  Higher_status <- Assembly_level[min(match(size_gc_status$status,Assembly_level))]
+  
+  used_genomes <- size_gc_status %>% 
+    filter(status == Higher_status)
+  
+  number_of_genomes_after_filter <- nrow(used_genomes)
+    
+  summ_entries <- do.call(cbind, lapply(used_genomes[,1:2], summary))
+      
+    
+  df_summ_entries <- data.frame(size_mb_min = summ_entries[1,1],
+                                  size_mb_1st_qtl = summ_entries[2,1],
+                                  size_mb_median = summ_entries[3,1],
+                                  size_mb_3rd_qtl = summ_entries[4,1],
+                                  size_mb_max = summ_entries[5,1],
+                                  gc_content_min = summ_entries[1,2],
+                                  gc_content_1st_qtl = summ_entries[2,2],
+                                  gc_content_median = summ_entries[3,2],
+                                  gc_content_3rd_qtl = summ_entries[4,2],
+                                  gc_content_max = summ_entries[5,2]
+                                  )
+    
+  genome_stats_table <- used_genomes %>% 
+    select(-status) %>%
+    mutate(df_summ_entries) %>%
+    mutate(highest_assembly_level = Higher_status, .after = gc_percent ) %>%
+    mutate(Taxonomy = taxa, .before = size_mb) %>%
+    mutate(number_of_genomes_with_highest_assembly_level = number_of_genomes_after_filter, .before = size_mb_min)
+    
+  genome_stats_table %>% 
+      slice(which.max(size_mb))
+  }
+
+# Testing function
+taxa = "Cronobacter turicensis" # 16
+
+c(genomic_traits(taxa)) %>%
+  as.data.frame()
+
+# check on the larger ones from the table
+taxonomy_search_using_apply <- lapply(X = number_of_entries$taxonomy[order(number_of_entries$n, decreasing = F)][1100:1163], FUN = genomic_traits)
+removed_list <- as_tibble(do.call(rbind,taxonomy_search_using_apply))
+
 ```
 
 For eukayotes
@@ -212,5 +312,10 @@ best_tax_euk %>%
               summarise(n_size_mb = n_distinct(size_mb),
                         n_gc_percent = n_distinct(gc_percent)) %>%
               filter(n_size_mb >= 3) 
+
+```
+Add tax genome size and GC content to table Federica
+
+```{r}
 
 ```
