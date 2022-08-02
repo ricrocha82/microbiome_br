@@ -1,0 +1,524 @@
+---
+title: "prague_colaborators"
+author: "RRPS"
+date: '2022-07-14'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+knitr::opts_chunk$set(
+	fig.height = 5,
+	fig.width = 8,
+	dpi = 180,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	echo = TRUE
+)
+```
+
+```{r CLEAR EVERYTHING, eval=FALSE, include=FALSE}
+# unload all non-base packages
+lapply(names(sessionInfo()$otherPkgs), function(pkgs)
+  detach(
+    paste0('package:', pkgs),
+    character.only = T,
+    unload = T,
+    force = T
+))
+
+rm(list=ls())
+```
+
+```{r load libraries, message=FALSE, warning=FALSE, include=FALSE}
+# load the packages
+# main packs to start with
+pcks <- c( "tidyverse", "janitor")
+# require("tidyverse")
+
+if(sum(as.numeric(!pcks %in% installed.packages())) != 0){
+  installation <- pcks[!pcks %in% installed.packages()]
+  for(i in 1:length(installation)) {
+    install.packages(installation, dependencies = T)
+    break()}
+  suppressPackageStartupMessages(
+  sapply(pcks,require,character.only = T)
+) 
+} else {
+  suppressPackageStartupMessages(
+  sapply(pcks,require,character.only = T)
+) 
+}
+
+rm(pcks)
+```
+
+# setting working directories
+```{r directories}
+# get working directory and paste directory to save outputs
+# in the Knit dropdown menu, select Knit directory, then Current Working Directory.
+# dir.create("~/R/microbiome_br/scripts")
+# dir.create("~/R/microbiome_br/outputs")
+# dir.create("~/R/microbiome_br/data")
+work_dir <- getwd()
+folder_path <- "~/R/microbiome_br/outputs/prague/"
+data.dir <- paste0(work_dir, "/data/prague")
+# dir.create("data")
+# dir.create(data.dir)
+setwd(data.dir)
+
+# # set colors
+# color_distance <- c("D0" = "deepskyblue2", 'D1' = 'brown1',  "D2" = "forestgreen", "D3" = "#440154FF", "D4" = "burlywood")
+# # color_distance1 <- c('D1' = 'brown1',  "D2" = "forestgreen", "D3" = "#440154FF", "D4" = "burlywood")
+# color_depth <- c('DP1'="darkorange",'DP2'="purple", "DP3" = "cyan4")
+# color_sites <- c(lease_1 = "#56B4E9", lease_2 ="#E69F00"  , Control =  "#009E73", other_leases = "#D1BCA8")
+
+# check the working directory
+paste("Working in directory:", getwd())
+```
+
+# data
+
+if the status in "Complete Genome" < 8: get the biggest Status. if > 8: make 3 column with Q1, median, and Q3 and count the genomes.
+If there isn´t Complete Genome > Scaffold > Contig > Chromosome 
+
+```{r get the data}
+# eukaryotic table
+euk <- read_delim('eukaryotes.txt')
+euk.clean <- euk %>% 
+  mutate(`#Organism/Name` = str_replace_all(`#Organism/Name`, "\\[|\\]","")) %>% 
+  mutate(Organism = `#Organism/Name`, .after = `#Organism/Name`) %>%
+  janitor::clean_names(.)
+
+# take a look in the data
+euk.clean %>% filter(if_any(everything(), ~str_detect(., "Candida albicans"))) %>% pull(status, organism)
+
+# prokaryotic table
+prok <- read_delim('prokaryotes.txt')
+prok.clean <- prok %>% 
+  mutate(`#Organism/Name` = str_replace_all(`#Organism/Name`, "\\[|\\]","")) %>% 
+  mutate(Organism = `#Organism/Name`, .after = `#Organism/Name`) %>%
+  janitor::clean_names(.)
+
+#prok %>% slice(102225)
+
+# lets take a look in the databases
+prok.clean %>% filter(if_any(everything(), ~str_detect(., "Koribacter versatilis Ellin345"))) %>% 
+  filter(if_any(status, ~str_detect(., "Complete")))
+
+prok %>% filter(if_any(everything(), ~str_detect(., "Candidatus")))
+
+# table final
+final.table <- read_delim('MG_FEDERICA_TABLE_FINAL.tab')
+
+# it removes any instance of '[' or ']'
+table.clean <- final.table %>% 
+  mutate(BEST_TAX = str_replace_all(BEST_TAX, "\\[|\\]","")) %>% 
+  rename('number_organism_name' = 'BEST_TAX') %>%
+  mutate(organism = number_organism_name, .after = number_organism_name) %>%
+  clean_names()
+
+table.clean %>% select(number_organism_name) %>% filter(if_any(everything(), ~str_detect(., "Candidatus")))
+table.clean %>% distinct(number_organism_name)
+
+# get the taxonomies freom Federica table
+taxonomies_federica <- table.clean %>% filter(number_organism_name != "-") %>% pull(number_organism_name) %>% as.factor() %>% levels()
+
+rm(euk,prok)
+
+```
+
+Extract the information based on the texonomies
+For prokaryotes 
+```{r}
+# filter prok table
+prok.info <- prok.clean %>% 
+              select(number_organism_name, organism, size_mb, gc_percent, status) %>% 
+              mutate(gc_percent = as.numeric(gc_percent))
+best_tax_prok <- taxonomies_federica %>% map_df(., ~prok.info  %>% 
+                                               filter(str_detect(organism, .x)) %>% 
+                                               mutate(taxonomy = .x)
+                                       )
+
+table.clean %>% select(number_organism_name) %>% filter(if_any(everything(), ~str_detect(., 'Magnetococcus')))
+prok.info %>% filter(if_any(everything(), ~str_detect(., 'Magnetococcus')))
+best_tax_prok %>% filter(if_any(everything(), ~str_detect(., 'Magnetococcus')))
+
+# Store hits found
+write.table(x = best_tax_prok, file = paste0(folder_path, "/federica_found_taxonomy_prok.txt"), quote = F, sep = "\t", row.names = F)
+
+## read hits found. Avoid running all steps again.
+# best_tax_prok <- read_delim(file = paste0(folder_path, "/federica_found_taxonomy_prok.txt"))
+
+# Checking for differences between organism name and Taxonomy from FEDERICA's table
+options(pillar.print_max = 10, pillar.print_min = 10, pillar.width = 35)
+
+which(best_tax_prok$number_organism_name != best_tax_prok$taxonomy)
+best_tax_prok[which(best_tax_prok$number_organism_name != best_tax_prok$taxonomy), c(1,6)]
+
+waldo::compare(best_tax_prok$number_organism_name, best_tax_prok$taxonomy)
+
+```
+
+
+For eukaryotes
+```{r}
+# filter euk table
+euk.info <- euk.clean %>% 
+              select(number_organism_name, organism, size_mb, gc_percent, status) %>% 
+              mutate(gc_percent = as.numeric(gc_percent))
+# Indentify taxa without GC content info (353 found)
+# euk.info[which(is.na(euk.info$gc_percent)),]
+euk.info %>% filter(is.na(gc_percent))
+
+best_tax_euk <- taxonomies_federica %>% map_df(., ~euk.info  %>% 
+                                              filter(str_detect(organism, .x)) %>% 
+                                              mutate(taxonomy = .x)
+                                      )
+# Store euk hits found
+write.table(x = best_tax_euk, file = paste0(folder_path, "/federica_found_taxonomy_euk.txt"), quote = F, sep = "\t", row.names = F)
+
+## Read hits found. Avoid running all steps again.
+# best_tax_euk <- read_delim(file = paste0(folder_path, "/federica_found_taxonomy_euk.txt"))
+
+# all.info <- euk.info %>% bind_rows(prok.info)
+```
+
+clean global environment
+```{r}
+rm(list=setdiff(ls(), c("taxonomies_federica", "best_tax_prok", "best_tax_euk", 'table.clean')))
+
+```
+
+
+Split the datasets based on status
+For prokayotes
+
+```{r}
+# table_summ_prok <- best_tax_prok %>% 
+#  select(taxonomy, status, size_mb, gc_percent) %>%
+#   group_by(taxonomy, status) %>% 
+#   skimr::skim(size_mb, gc_percent) %>%
+#   left_join(best_tax_prok %>% 
+#               group_by(taxonomy, status) %>% 
+#               summarise(n_size_mb = n_distinct(size_mb),
+#                         n_gc_percent = n_distinct(gc_percent))
+#             )
+# 
+# table_summ_prok %>% head
+# 
+# table_summ_prok %>% distinct(skim_variable)
+```
+
+```{r}
+# status
+best_tax_prok %>% distinct(status)
+# best_tax_prok_complete_genome <- best_tax_prok %>% filter(status == 'Complete Genome')
+# best_tax_prok_scaffold <- best_tax_prok %>% filter(status == 'Scaffold')
+# best_tax_prok_contig <- best_tax_prok %>% filter(status == 'Contig')
+# best_tax_prok_chromosome <- best_tax_prok %>% filter(status == 'Chromosome')
+
+# best_tax_prok %>% summarise(mean_size_mb = mean(size_mb),
+                    #           max_size_mb = max(size_mb),
+                    #           min_size_mb = min(size_mb),
+                    #           n_size_mb = n_distinct(size_mb)
+                    #           ) %>%
+  # filter(n_size_mb >= 3)
+```
+
+
+```{r}
+# # Create function to gather statistics about the genomic information, using the highest level of assembly and the longer assembly
+# number_of_entries <- best_tax_prok %>% count(taxonomy)
+# # See the taxa with the most entries
+# number_of_entries[order(number_of_entries$n,decreasing = T),]
+# ## Tests
+# # taxa = "Xanthomonas campestris pv. campestris" # 80
+# # taxa = "Cronobacter turicensis" # 16
+# # taxa = "Acetobacter pasteurianus IFO 3283-32" # 1
+# # taxa = "Acetobacter pasteurianus IFO 3283-01" # 2
+# # 
+# # match("Acetobacter pasteurianus IFO 3283-32", number_of_entries$taxonomy)
+# # number_of_entries[match(taxa, number_of_entries$taxonomy), "n"]
+# # test_entries <- number_of_entries[match(taxa, number_of_entries$taxonomy), "n"]
+# ## The function
+# genomic_traits <- function(taxa){
+#   
+#   Assembly_level <- c("Complete Genome","Chromosome","Scaffold","Contig")
+#   
+#   number_of_entries_in_genomic_db <- number_of_entries[match(taxa, number_of_entries$taxonomy),"n"]
+#    
+#   size_gc_status <-
+#     best_tax_prok[which(!is.na(match(best_tax_prok$taxonomy,taxa))),c("size_mb","gc_percent","status")] %>%
+#     mutate(number_of_entries_in_NCBI = as.numeric(number_of_entries_in_genomic_db))
+#   
+#   Higher_status <- Assembly_level[min(match(size_gc_status$status,Assembly_level))]
+#   
+#   used_genomes <- size_gc_status %>% 
+#     filter(status == Higher_status)
+#   
+#   number_of_genomes_after_filter <- nrow(used_genomes)
+#     
+#   summ_entries <- do.call(cbind, lapply(used_genomes[,1:2], summary))
+#       
+#     
+#   df_summ_entries <- data.frame(size_mb_min = summ_entries[1,1],
+#                                   size_mb_1st_qtl = summ_entries[2,1],
+#                                   size_mb_median = summ_entries[3,1],
+#                                   size_mb_3rd_qtl = summ_entries[4,1],
+#                                   size_mb_max = summ_entries[5,1],
+#                                   gc_content_min = summ_entries[1,2],
+#                                   gc_content_1st_qtl = summ_entries[2,2],
+#                                   gc_content_median = summ_entries[3,2],
+#                                   gc_content_3rd_qtl = summ_entries[4,2],
+#                                   gc_content_max = summ_entries[5,2]
+#                                   )
+#     
+#   genome_stats_table <- used_genomes %>% 
+#     select(-status) %>%
+#     mutate(df_summ_entries) %>%
+#     mutate(highest_assembly_level = Higher_status, .after = gc_percent ) %>%
+#     mutate(Taxonomy = taxa, .before = size_mb) %>%
+#     mutate(number_of_genomes_with_highest_assembly_level = number_of_genomes_after_filter, .before = size_mb_min)
+#     
+#   genome_stats_table %>% 
+#       slice(which.max(size_mb))
+#   }
+# # Testing function
+# taxa = "Cronobacter turicensis" # 16
+# c(genomic_traits(taxa)) %>%
+#   as.data.frame()
+# # check on the larger ones from the table
+# taxonomy_search_using_apply <- lapply(X = number_of_entries$taxonomy[order(number_of_entries$n, decreasing = F)][1100:1163], FUN = genomic_traits)
+# removed_list <- as_tibble(do.call(rbind,taxonomy_search_using_apply))
+```
+
+
+```{r}
+# Create function to gather statistics about the genomic information, using the highest level of assembly and the longer assembly
+
+# number_of_entries <- best_tax_prok %>% count(taxonomy, sort = T )
+# 
+# # See the taxa with the most entries
+# number_of_entries
+
+#number_of_entries[order(number_of_entries$n,decreasing = T),]
+
+## Tests
+# df = best_tax_prok 
+# taxa = "Xanthomonas campestris pv. campestris" # 80
+# taxa = "Cronobacter turicensis" # 16
+# taxa = "Acetobacter pasteurianus IFO 3283-32" # 1
+# taxa = "Acetobacter pasteurianus IFO 3283-01" # 2
+# 
+# match("Acetobacter pasteurianus IFO 3283-32", number_of_entries$taxonomy)
+# number_of_entries[match(taxa, number_of_entries$taxonomy), "n"]
+# test_entries <- number_of_entries[match(taxa, number_of_entries$taxonomy), "n"]
+
+## The function
+genomic_traits <- function(taxa, df){
+  
+  Assembly_level <- c("Complete Genome","Chromosome","Scaffold","Contig")
+
+  number_of_entries <- df %>% count(taxonomy)
+  
+  number_of_entries_in_genomic_db <- number_of_entries %>% 
+                                          filter(taxonomy == taxa) %>% 
+                                          pull(n)
+  
+  size_gc_status <- df %>% 
+                        filter(taxonomy == taxa) %>% 
+                        select(size_mb,gc_percent,status, number_organism_name) %>%
+                        mutate(number_of_entries_in_NCBI = as.numeric(number_of_entries_in_genomic_db))
+  
+  Higher_status <- Assembly_level[min(match(size_gc_status$status,Assembly_level))]
+  
+  used_genomes <- size_gc_status %>% 
+    filter(status == Higher_status)
+
+  number_of_genomes_after_filter <- nrow(used_genomes)
+  
+  df_summ_entries <- used_genomes %>% 
+      select(size_mb, gc_percent) %>% 
+      summarize(across(everything(), ~summary(.) %>% as_tibble_row() %>% list())) %>% 
+      unnest(cols = c(size_mb, gc_percent), names_sep = "_") %>%
+      as_tibble(.name_repair = janitor::make_clean_names) %>%
+      setNames(str_replace(names(.), "qu", "qtl"))
+  
+  genome_stats_table <- used_genomes %>% 
+    select(-status) %>%
+    mutate(df_summ_entries) %>%
+    mutate(highest_assembly_level = Higher_status, .after = gc_percent ) %>%
+    mutate(Taxonomy = taxa, .before = size_mb) %>%
+    mutate(Taxonomy_from_dataset = number_organism_name, .after = Taxonomy, .keep = 'unused') %>%
+    mutate(number_of_genomes_with_highest_assembly_level = number_of_genomes_after_filter, .before = size_mb_min)
+  
+  genome_stats_table %>% 
+    slice_max(size_mb)
+}
+
+# Testing function
+taxa = "Acetobacter pasteurianus IFO 3283-01" 
+
+genomic_traits(taxa, best_tax_prok)
+
+# check on the larger ones from the table
+larger_ones_prok <- number_of_entries %>% 
+                  slice_head(n = 64) %>% 
+                  pull(taxonomy)
+
+prok_taxonomy_search_using_purrr <- larger_ones_prok %>% map_df(., ~genomic_traits(., best_tax_prok))
+
+prok_taxonomy_search_using_purrr %>% count(highest_assembly_level)
+
+# taxonomy_search_using_apply <- lapply(X = number_of_entries$taxonomy[order(number_of_entries$n, decreasing = F)][1100:1163], FUN = genomic_traits)
+# removed_list <- as_tibble(do.call(rbind,taxonomy_search_using_apply))
+
+```
+
+For eukayotes
+```{r}
+# status
+# best_tax_euk %>% distinct(status)
+# table_summ_euk <- best_tax_euk %>% 
+#  select(taxonomy, status, size_mb, gc_percent) %>%
+#   group_by(taxonomy, status) %>% 
+#   skimr::skim(size_mb, gc_percent) %>%
+#   left_join(best_tax_euk %>% 
+#               group_by(taxonomy, status) %>% 
+#               summarise(n_size_mb = n_distinct(size_mb),
+#                         n_gc_percent = n_distinct(gc_percent))
+#             )
+# 
+# # table_summ_euk %>% distinct(skim_variable)
+# # 
+# # best_tax_euk %>% filter(taxonomy == "Alternaria alternata" & status == "Contig") %>%
+# #   group_by(taxonomy, status) %>%
+# #    summarise(n_size_mb = n_distinct(size_mb),
+# #                         n_gc_percent = n_distinct(gc_percent)) 
+# 
+# best_tax_euk %>% 
+#               group_by(taxonomy, status) %>% 
+#               summarise(n_size_mb = n_distinct(size_mb),
+#                         n_gc_percent = n_distinct(gc_percent)) %>%
+#               filter(n_size_mb >= 3) 
+
+```
+
+Apply the function to the eukaryotic dataset
+```{r}
+# number_of_entries <- best_tax_euk %>% count(taxonomy, sort = T )
+# 
+# # See the taxa with the most entries
+# number_of_entries
+
+
+# Testing function
+genomic_traits("Aaosphaeria arxii", best_tax_euk)
+
+# check on the larger ones from the table
+larger_ones_euk <- number_of_entries %>% 
+                  slice_head(n = 64) %>% 
+                  pull(taxonomy)
+
+euk_taxonomy_search_using_purrr <- larger_ones_euk %>% map_df(., ~genomic_traits(., best_tax_euk))
+
+euk_taxonomy_search_using_purrr %>% count(highest_assembly_level)
+```
+
+Clean environment
+```{r}
+rm(list=setdiff(ls(), c("taxonomies_federica", "best_tax_prok", "best_tax_euk", 'table.clean', 'genomic_traits')))
+```
+
+Add tax genome size and GC content to table Federica
+
+Prokaryotes
+```{r}
+# only prokaryotes 
+full_dataset_prok <- table.clean %>% 
+            filter(organism %in% best_tax_prok$taxonomy) %>%
+            bind_cols(map_df(.$organism, ~genomic_traits(., best_tax_prok)))
+
+# Store euk hits found
+write.table(x = full_dataset_prok, file = paste0(folder_path, "/federica_full_prok.txt"), quote = F, sep = "\t", row.names = F)
+
+
+# only eukaryotes 
+full_dataset_euk <- table.clean %>% 
+            filter(organism %in% best_tax_euk$taxonomy) %>%
+            bind_cols(map_df(.$organism, ~genomic_traits(., best_tax_euk)))
+
+# Store euk hits found
+write.table(x = full_dataset_euk, file = paste0(folder_path, "/federica_full_euk.txt"), quote = F, sep = "\t", row.names = F)
+
+```
+
+
+```{r}
+# orgs_prok <- table.clean %>% 
+#              filter(organism %in% best_tax_prok$taxonomy) %>%
+#           # filter(organism %in% c("Desulfitobacterium hafniense DCB-2")) %>%
+#            # distinct(organism) %>%
+#             pull
+# 
+# full_dataset_prok1 <- table.clean %>% 
+#                filter(organism %in% best_tax_prok$taxonomy) %>%
+#               # filter(organism %in% c("Desulfitobacterium hafniense DCB-2")) %>%
+#                bind_cols(map_df(orgs_prok, ~genomic_traits(., best_tax_prok)))
+
+
+# prok_table_federica <- best_tax_prok %>% 
+#   slice_head(n = 20) %>%
+#   pull(taxonomy) %>%
+#   map_df(., ~genomic_traits(., best_tax_prok)) %>%
+#   rename(organism = Taxonomy) %>%
+#   distinct() # remove duplicate rows
+# 
+# df_test_prok <- table.clean %>%
+#   slice_head(n = 20) %>%
+#   left_join(euk_table_federica) %>%
+#   distinct()
+
+
+# PS:
+# couldn't find some taxa
+# e.g., Magnetococcus sp. MC-1 (Federica table) -> Magnetococcus marinus MC-1 (prokayotic table)
+# Pseudomonas syringae pv. phaseolicola 1448 (Federica table) -> there is any Pseudomonas syringae pv. phaseolicola 1448 in the prok table
+# Symbiotaphrina kochii (Federica table) -> no Symbiotaphrina kochii in eukaryotic table
+# 
+# table.clean %>% select(number_organism_name) %>% filter(if_any(everything(), ~str_detect(., 'Symbiotaphrina')))
+# euk.info %>% filter(if_any(everything(), ~str_detect(., 'Symbiotaphrina')))
+# best_tax_euk %>% filter(if_any(everything(), ~str_detect(., 'Symbiotaphrina')))
+```
+
+Eukaryotes
+```{r}
+
+# orgs_euk <- table.clean %>% 
+#              filter(organism %in% c("Aaosphaeria arxii", 'Abortiporus biennis', 'Absidia repens')) %>%
+#              pull
+# 
+# full_dataset_euk <- table.clean %>% 
+#             filter(organism %in% c("Aaosphaeria arxii", 'Abortiporus biennis', 'Absidia repens')) %>%
+#             bind_cols(map_df(orgs_euk, ~genomic_traits(., best_tax_euk)))
+
+# euk_table_federica <- best_tax_euk %>%
+#   filter(taxonomy %in% c("Aaosphaeria arxii", 'Abortiporus biennis', 'Absidia repens')) %>%
+#   pull(taxonomy) %>%
+#   map_df(., ~genomic_traits(., best_tax_euk)) %>%
+#   rename(organism = Taxonomy) %>%
+#   distinct() # remove duplicate rows
+# # 
+# df_test_euk <- table.clean %>%
+#    filter(organism %in% c("Aaosphaeria arxii", 'Abortiporus biennis', 'Absidia repens')) %>%
+#  # slice_head(n = 20) %>%
+#   left_join(euk_table_federica) %>%
+#   distinct()
+
+
+# df_test_euk %>% filter(organism == "Aaosphaeria arxii") %>% view
+```
+

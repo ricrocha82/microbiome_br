@@ -1,0 +1,141 @@
+---
+title: "extract values from tiff files"
+author: "RRPS"
+date: "07/04/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+knitr::opts_chunk$set(
+	fig.height = 5,
+	fig.width = 8,
+	dpi = 180,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	echo = TRUE
+)
+```
+
+```{r CLEAR EVERYTHING, eval=FALSE, include=FALSE}
+# unload all non-base packages
+lapply(names(sessionInfo()$otherPkgs), function(pkgs)
+  detach(
+    paste0('package:', pkgs),
+    character.only = T,
+    unload = T,
+    force = T
+))
+
+rm(list=ls())
+```
+
+Need to start a new session to run this script due to gstat conflicts with other packages
+
+```{r load libraries, message=FALSE, warning=FALSE, include=FALSE}
+# load the packages
+# main packs to start with
+pcks <- c('raster', "tidyverse", "rgdal")
+
+
+if(sum(as.numeric(!pcks %in% installed.packages())) != 0){
+  installation <- pcks[!pcks %in% installed.packages()]
+  for(i in 1:length(installation)) {
+    install.packages(installation, dependencies = T)
+    break()}
+  suppressPackageStartupMessages(
+  sapply(pcks,require,character.only = T)
+) 
+} else {
+  suppressPackageStartupMessages(
+  sapply(pcks,require,character.only = T)
+) 
+}
+
+rm(pcks)
+```
+
+```{r packages and functions}
+# get working directory and paste directory to save outputs
+work_dir <- getwd()
+folder_path <- paste0(work_dir, "/outputs")
+data.dir <- paste0(work_dir, "/data/")
+setwd(data.dir)
+
+# # set colors
+# color_distance <- c("D0" = "deepskyblue2", 'D1' = 'brown1',  "D2" = "forestgreen", "D3" = "#440154FF", "D4" = "burlywood")
+# # color_distance1 <- c('D1' = 'brown1',  "D2" = "forestgreen", "D3" = "#440154FF", "D4" = "burlywood")
+# color_depth <- c('DP1'="darkorange",'DP2'="purple", "DP3" = "cyan4")
+# color_sites <- c(lease_1 = "#56B4E9", lease_2 ="#E69F00"  , Control =  "#009E73", other_leases = "#D1BCA8")
+
+# check the working directory
+paste("Working in directory:", getwd())
+```
+
+Get the coordinates
+```{r}
+samples <- read_csv("samples.csv") %>% rename(Lat = 2, Long = 3)
+# get the coordinates
+points <- samples %>% select(Long, Lat)
+```
+
+And the raster file
+Run to unzip the files
+PS: I renamed the file to "br_organic_carbon_stock_0-5cm.zip"
+```{r load the files}
+# link to the data http://geoinfo.cnps.embrapa.br/documents/3093
+
+# embrapa_file <- paste0(data.dir, "br_organic_carbon_stock_0-5cm.zip")
+
+# unzip the file
+
+# unzip(embrapa_file)
+
+```
+
+Using `raster` package
+```{r}
+raster_soil <- raster("br_organic_carbon_stock_0-5cm_pred_Mg_ha.tif")
+# check coordinate reference system (crs)
+raster_soil@crs
+
+# transform to spatial points
+sppoints <- SpatialPoints(points, proj4string=CRS('+proj=longlat +datum=WGS84 +ellps=GRS80'))
+
+# transform for map projection and datum transformation
+tp <- spTransform(sppoints, crs(raster_soil))
+
+# extract the values
+samples <- samples %>% mutate(organic_carbon_stock_0_5_cm = raster::extract(raster_soil, tp))
+
+samples %>% 
+  ggplot(aes(x = Long, y = Lat, color = organic_carbon_stock_0_5_cm)) +
+  geom_point(size = 3, alpha = 0.5)  +
+  scale_color_gradientn(colors = c("blue", "yellow", "red")) +
+  labs(color = "Organic C stock \n soil (0-5 cm)") +
+ # ggrepel::geom_text_repel(aes(label=Samples)) +
+  theme_minimal()
+
+
+samples %>% write.csv(paste0(folder_path,"/samples_1.csv"))
+```
+
+Using `sf` and `stars` package
+```{r load the maps}
+# raster_soil  = read_stars("~/R/microbiome_br/data/br_organic_carbon_stock_0-5cm_pred_Mg_ha.tif")
+# # check the structure
+# raster_soil
+# 
+# plot(raster_soil)
+# 
+#
+# # convert into an sf object
+# points_sf = points %>% 
+#   st_as_sf(coords = c("Long", "Lat"), crs = st_crs(raster_soil)) %>%
+#   st_sample(raster_soil)
+# 
+# e = st_extract(raster_soil, points)
+
+```
