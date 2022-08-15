@@ -34,10 +34,11 @@ rm(list=ls())
 
 Need to start a new session to run this script due to gstat conflicts with other packages
 
+# packs
 ```{r load libraries, message=FALSE, warning=FALSE, include=FALSE}
 # load the packages
 # main packs to start with
-pcks <- c('raster', "tidyverse", "rgdal")
+pcks <- c('raster', "tidyverse", "rgdal", "downloader")
 
 
 if(sum(as.numeric(!pcks %in% installed.packages())) != 0){
@@ -57,12 +58,13 @@ if(sum(as.numeric(!pcks %in% installed.packages())) != 0){
 rm(pcks)
 ```
 
+# dir
 ```{r packages and functions}
 # get working directory and paste directory to save outputs
 work_dir <- getwd()
-folder_path <- paste0(work_dir, "/outputs")
-data.dir <- paste0(work_dir, "/data/")
-setwd(data.dir)
+folder_path <- paste0(work_dir, "/outputs/microbiome_br/")
+data.dir <- paste0(work_dir, "/data/microbiome_br")
+# setwd(data.dir)
 
 # # set colors
 # color_distance <- c("D0" = "deepskyblue2", 'D1' = 'brown1',  "D2" = "forestgreen", "D3" = "#440154FF", "D4" = "burlywood")
@@ -72,45 +74,98 @@ setwd(data.dir)
 
 # check the working directory
 paste("Working in directory:", getwd())
+
 ```
 
-Get the coordinates
+
+# function
+
+Make a function to extract the values from each variable automatically
+
+Get the coordinates and links
 ```{r}
-samples <- read_csv("samples.csv") %>% rename(Lat = 2, Long = 3)
+samples <- read_csv(paste0(data.dir, "/samples.csv")) %>% rename(Lat = 2, Long = 3)
 # get the coordinates
 points <- samples %>% select(Long, Lat)
+
+# get the links
+maps_link <- read_csv(paste0(data.dir, "/new_maps_geoTiff.csv"))
 ```
 
-And the raster file
+Get the files from the DB
+Download
 Run to unzip the files
 PS: I renamed the file to "br_organic_carbon_stock_0-5cm.zip"
 ```{r load the files}
-# link to the data http://geoinfo.cnps.embrapa.br/documents/3093
+# download
+# Specify URL where file is stored
+unzip_files <- function(var){
+  
+  url <- maps_link %>% filter(variable == var) %>% pull(link)
+  variable <- maps_link %>% filter(variable == var) %>% pull(variable)
+  # Specify destination where file should be saved or create a temp file
+  destfile <- paste0(data.dir,"/",var, "_0-5cm.zip")
+  temp <- tempfile()
+  # Apply download function from "downloader" package
+  download(url, temp, mode = "wb")
+  # unzip the file
+  unzip(destfile)
+  unlink(temp)
+  
+}
 
-# embrapa_file <- paste0(data.dir, "br_organic_carbon_stock_0-5cm.zip")
+maps_link %>% pull(variable) %>% map(., unzip_files)
 
-# unzip the file
-
-# unzip(embrapa_file)
-
+# embrapa_file <- paste0(data.dir, "/br_organic_carbon_stock_0-5cm.zip")
 ```
+
 
 Using `raster` package
 ```{r}
-raster_soil <- raster("br_organic_carbon_stock_0-5cm_pred_Mg_ha.tif")
+# get the files path
+rasters_path <- sort(list.files(path = data.dir, pattern=".tif", full.names = TRUE))
+
+# function to return the dataframes with points and env values
+extract_points_raster <- function(raster_path, points, samples){
+  raster_file <- raster(raster_path)
+  # transform to spatial points
+  sppoints <- SpatialPoints(points, proj4string=CRS('+proj=longlat +datum=WGS84 +ellps=GRS80'))
+  # transform for map projection and datum transformation
+  tp <- spTransform(sppoints, crs(raster_file))
+  # to name the new column
+  var_name <- str_extract(basename(raster_path), "[^.]+")
+  # extract the values
+   samples_df <- tibble(Samples = samples$Samples,
+                        # lat = samples$Lat,
+                        # long = samples$Long,
+                        !!var_name := raster::extract(raster_file, tp))
+  return(samples_df)
+}
+
+
+# apply raster funtion
+samples_df <- rasters_path %>% 
+              map(., ~extract_points_raster(.,points, samples)) %>% 
+              reduce(left_join, by = "Samples") %>%
+              left_join(samples)
+
+
+# raster_soil <- raster(paste0(data.dir, "/br_organic_carbon_stock_0-5cm_pred_Mg_ha.tif"))
 # check coordinate reference system (crs)
-raster_soil@crs
+# raster_soil@crs
 
 # transform to spatial points
-sppoints <- SpatialPoints(points, proj4string=CRS('+proj=longlat +datum=WGS84 +ellps=GRS80'))
+# sppoints <- SpatialPoints(points, proj4string=CRS('+proj=longlat +datum=WGS84 +ellps=GRS80'))
+# sppoints <- rasters %>% map(., ~SpatialPoints(points, proj4string=CRS('+proj=longlat +datum=WGS84 +ellps=GRS80')))
 
 # transform for map projection and datum transformation
-tp <- spTransform(sppoints, crs(raster_soil))
+# tp <- spTransform(sppoints, crs(raster_soil))
+# tp <- sppoints %>% map2(., rasters, ~spTransform, crs(.y))
 
 # extract the values
-samples <- samples %>% mutate(organic_carbon_stock_0_5_cm = raster::extract(raster_soil, tp))
+# samples <- samples %>% mutate(organic_carbon_stock_0_5_cm = raster::extract(raster_soil, tp))
 
-samples %>% 
+samples_df %>% 
   ggplot(aes(x = Long, y = Lat, color = organic_carbon_stock_0_5_cm)) +
   geom_point(size = 3, alpha = 0.5)  +
   scale_color_gradientn(colors = c("blue", "yellow", "red")) +
@@ -119,7 +174,7 @@ samples %>%
   theme_minimal()
 
 
-samples %>% write.csv(paste0(folder_path,"/samples_1.csv"))
+samples_df %>% write.csv(paste0(folder_path,"/samples_all_env_par.csv"))
 ```
 
 Using `sf` and `stars` package
